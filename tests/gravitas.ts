@@ -158,7 +158,7 @@ describe("gravitas", () => {
       [
         Buffer.from("event"),
         creator.publicKey.toBuffer(),
-        Buffer.from(eventId.toString()),
+        new anchor.BN(eventId).toArrayLike(Buffer, "le", 8),
       ],
       program.programId
     );
@@ -171,7 +171,6 @@ describe("gravitas", () => {
     const maxCapacity = 100;
 
     try {
-      console.log("system program id", SystemProgram.programId.toString());
       const tx = await program.methods
         .createEvent(
           new anchor.BN(eventId),
@@ -183,22 +182,11 @@ describe("gravitas", () => {
           maxCapacity
         )
         .accounts({
-          // @ts-ignore
-          // event: eventPda,
           creator: creator.publicKey,
           tokenMint: tokenMint,
-          // systemProgram: SystemProgram.,
         })
         .signers([creator])
         .rpc();
-
-      // Confirm the transaction
-      await provider.connection.confirmTransaction(tx);
-
-      // Add a small delay
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      console.log("Event created with transaction signature", tx);
 
       // Fetch the created event account
       const eventAccount = await program.account.event.fetch(eventPda);
@@ -227,21 +215,45 @@ describe("gravitas", () => {
       throw error;
     }
   });
-  /*
-  it("Registers a user for the event", async () => {
-    await program.methods
-      .registerForEvent()
-      .accounts({
-        event: eventPda,
-        user: user.publicKey,
-        userTokenAccount: userTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .signers([user])
-      .rpc();
 
-    const eventAccount = await program.account.event.fetch(eventPda);
-    expect(eventAccount.participants).to.include(user.publicKey);
+  it("Registers a user for the event", async () => {
+    // Ensure we have the correct eventPda from the previous test
+    console.log("Event PDA:", eventPda.toString());
+
+    try {
+      // Get the latest event data
+      const eventBefore = await program.account.event.fetch(eventPda);
+      console.log("Participants before:", eventBefore.participants.length);
+
+      // Register the user for the event
+      const tx = await program.methods
+        .registerForEvent()
+        .accounts({
+          event: eventPda,
+          user: user.publicKey,
+          userTokenAccount: userTokenAccount,
+          // tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user])
+        .rpc();
+
+      console.log("User registered with transaction signature", tx);
+
+      // Fetch the updated event account
+      const eventAfter = await program.account.event.fetch(eventPda);
+      console.log("Participants after:", eventAfter.participants.length);
+
+      // Assertions
+      expect(eventAfter.participants.length).to.equal(
+        eventBefore.participants.length + 1
+      );
+      expect(
+        eventAfter.participants[eventAfter.participants.length - 1].toString()
+      ).to.equal(user.publicKey.toString());
+    } catch (error) {
+      console.error("Error registering for event:", error);
+      throw error;
+    }
   });
 
   it("Fails to register the same user twice", async () => {
@@ -252,11 +264,13 @@ describe("gravitas", () => {
           event: eventPda,
           user: user.publicKey,
           userTokenAccount: userTokenAccount,
-          tokenProgram: TOKEN_PROGRAM_ID,
+          // tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([user])
         .rpc();
-      expect.fail("Should have thrown an error");
+
+      // If we reach here, the second registration didn't throw an error as expected
+      expect.fail("User was able to register twice, but shouldn't have been.");
     } catch (error) {
       expect(error.message).to.include("AlreadyRegistered");
     }
@@ -267,31 +281,48 @@ describe("gravitas", () => {
       .cancelEvent()
       .accounts({
         event: eventPda,
-        creator: provider.wallet.publicKey,
+        creator: creator.publicKey,
       })
+      .signers([creator])
       .rpc();
 
     const eventAccount = await program.account.event.fetch(eventPda);
     expect(eventAccount.isActive).to.be.false;
   });
 
+  it("Non-Creator cancels the event", async () => {
+    try {
+      const tx = await program.methods
+        .cancelEvent()
+        .accounts({
+          event: eventPda,
+          creator: creator.publicKey,
+        })
+        .signers([user])
+        .rpc();
+
+      expect.fail("");
+    } catch (error) {
+      console.log("error is ", error);
+      expect(error.message).to.include("unknown signer");
+    }
+  });
+
   it("Fails to register for a cancelled event", async () => {
-    const newUser = anchor.web3.Keypair.generate();
     try {
       await program.methods
         .registerForEvent()
         .accounts({
           event: eventPda,
-          user: newUser.publicKey,
+          user: user.publicKey,
           userTokenAccount: userTokenAccount, // Using the same token account for simplicity
-          tokenProgram: TOKEN_PROGRAM_ID,
+          // tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .signers([newUser])
+        .signers([user])
         .rpc();
       expect.fail("Should have thrown an error");
     } catch (error) {
       expect(error.message).to.include("EventNotActive");
     }
   });
-*/
 });
