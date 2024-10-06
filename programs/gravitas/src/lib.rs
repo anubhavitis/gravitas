@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount};
+use anchor_spl::token_interface::{Mint, Token2022, TokenAccount};
 
-declare_id!("7Q1CvkDLuDGVFEGEHNqGv4CmgdcxHSSNacAGM6eEQss");
+declare_id!("Htc9ae9f2RvBpS7iwkWFA5RnaPTBAF6Fgz3GPs69DyiF");
 
 #[derive(Accounts)]
 #[instruction(event_id: u64)]
@@ -16,7 +16,7 @@ pub struct CreateEvent<'info> {
     pub event: Account<'info, Event>,
     #[account(mut)]
     pub creator: Signer<'info>,
-    pub token_mint: Account<'info, token::Mint>,
+    pub token_mint: InterfaceAccount<'info, Mint>,
     pub system_program: Program<'info, System>,
 }
 
@@ -31,8 +31,8 @@ pub struct RegisterForEvent<'info> {
     #[account(
         constraint = user_token_account.owner == user.key() @ ErrorCode::InvalidTokenAccount
     )]
-    pub user_token_account: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub user_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Program<'info, Token2022>,
 }
 
 #[derive(Accounts)]
@@ -61,7 +61,19 @@ pub struct Event {
 }
 
 impl Event {
-    const LEN: usize = 8 + 32 + 8 + 32 + 256 + 8 + 8 + 32 + 8 + 1 + 4 + (32 * 100); // Assuming a max of 100 participants
+    const LEN: usize = 8 + // discriminator
+        32 + // creator: Pubkey
+        8 + // event_id: u64
+        (4 + 256) + // name: String (4 bytes for length + 256 bytes for content)
+        (4 + 256) + // description: String (4 bytes for length + 256 bytes for content)
+        8 + // start_time: i64
+        8 + // end_time: i64
+        32 + // required_token_mint: Pubkey
+        8 + // required_token_amount: u64
+        1 + // is_active: bool
+        4 + // max_capacity: u32
+        4 + (32 * 100) // participants: Vec<Pubkey> (4 bytes for length + 32 bytes per pubkey * 100 participants)
+        + 1000;
 }
 
 #[error_code]

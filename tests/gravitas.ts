@@ -1,15 +1,35 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Gravitas } from "../target/types/gravitas";
-import { PublicKey, Keypair } from "@solana/web3.js";
+import {
+  PublicKey,
+  Keypair,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
 import {
   createMint,
   mintTo,
   transfer,
   getOrCreateAssociatedTokenAccount,
   Account,
+  getTokenMetadata,
+  TYPE_SIZE,
+  LENGTH_SIZE,
+  getMintLen,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
+  createInitializeMetadataPointerInstruction,
+  createInitializeMintInstruction,
 } from "@solana/spl-token";
 import { expect } from "chai";
+import {
+  createInitializeInstruction,
+  createUpdateFieldInstruction,
+  pack,
+  TokenMetadata,
+} from "@solana/spl-token-metadata";
 
 describe("gravitas", () => {
   const provider = anchor.AnchorProvider.env();
@@ -17,15 +37,15 @@ describe("gravitas", () => {
 
   const program = anchor.workspace.Gravitas as Program<Gravitas>;
 
-  let user: Keypair;
-  let creator: Keypair;
+  let admin: Keypair;
+  let helper: Keypair;
 
-  let associatedCreatorTokenAccount: Account;
-  let associatedUserTokenAccount: Account;
+  let associatedAdminAccount: Account;
+  let associatedHelperAccount: Account;
 
   let eventId: number;
   let eventPda: PublicKey;
-  let tokenMint: PublicKey;
+  let mint: PublicKey;
 
   async function getFundedKeypair(): Promise<Keypair> {
     const obj = anchor.web3.Keypair.generate();
@@ -38,68 +58,203 @@ describe("gravitas", () => {
     return obj;
   }
 
-  before(async () => {
-    // Generate a random event ID between 0 and 999999
-    eventId = Math.floor(Math.random() * 1000000);
+  async function testNewScript() {
+    admin = await getFundedKeypair();
+    // Generate new keypair for Mint Account
+    const mintKeypair = Keypair.generate();
+    // Address for Mint Account
+    mint = mintKeypair.publicKey;
+    // Decimals for Mint Account
+    const decimals = 2;
+    // Authority that can mint new tokens
+    const mintAuthority = admin.publicKey;
+    // Authority that can update the metadata pointer and token metadata
+    const updateAuthority = admin.publicKey;
 
-    // Create a new Solana keypair for the user
-    creator = await getFundedKeypair();
-    console.log("Funded creator account", creator.publicKey.toBase58());
+    // Metadata to store in Mint Account
+    const metaData: TokenMetadata = {
+      updateAuthority: updateAuthority,
+      mint: mint,
+      name: "TEST GRAVITAS",
+      symbol: "TGS",
+      uri: "https://github.com/user-attachments/files/17265711/test.json",
+      additionalMetadata: [["description", "Only Possible On Solana"]],
+    };
 
-    user = await getFundedKeypair();
-    console.log("Funded user account");
+    // Size of MetadataExtension 2 bytes for type, 2 bytes for length
+    const metadataExtension = TYPE_SIZE + LENGTH_SIZE;
+    // Size of metadata
+    const metadataLen = pack(metaData).length;
 
-    // Create a token mint
-    tokenMint = await createMint(
-      provider.connection,
-      creator,
-      creator.publicKey,
-      null,
-      9
+    // Size of Mint Account with extension
+    const mintLen = getMintLen([ExtensionType.MetadataPointer]);
+
+    // Minimum lamports required for Mint Account
+    const lamports =
+      await provider.connection.getMinimumBalanceForRentExemption(
+        mintLen + metadataExtension + metadataLen
+      );
+
+    // Instruction to invoke System Program to create new account
+    const createAccountInstruction = SystemProgram.createAccount({
+      fromPubkey: admin.publicKey, // Account that will transfer lamports to created account
+      newAccountPubkey: mint, // Address of the account to create
+      space: mintLen, // Amount of bytes to allocate to the created account
+      lamports, // Amount of lamports transferred to created account
+      programId: TOKEN_2022_PROGRAM_ID, // Program assigned as owner of created account
+    });
+
+    // Instruction to initialize the MetadataPointer Extension
+    const initializeMetadataPointerInstruction =
+      createInitializeMetadataPointerInstruction(
+        mint, // Mint Account address
+        updateAuthority, // Authority that can set the metadata address
+        mint, // Account address that holds the metadata
+        TOKEN_2022_PROGRAM_ID
+      );
+
+    // Instruction to initialize Mint Account data
+    const initializeMintInstruction = createInitializeMintInstruction(
+      mint, // Mint Account Address
+      decimals, // Decimals of Mint
+      mintAuthority, // Designated Mint Authority
+      null, // Optional Freeze Authority
+      TOKEN_2022_PROGRAM_ID // Token Extension Program ID
     );
 
-    console.log("Token mint created", tokenMint.toString());
+    // Instruction to initialize Metadata Account data
+    const initializeMetadataInstruction = createInitializeInstruction({
+      programId: TOKEN_2022_PROGRAM_ID, // Token Extension Program as Metadata Program
+      metadata: mint, // Account address that holds the metadata
+      updateAuthority: updateAuthority, // Authority that can update the metadata
+      mint: mint, // Mint Account address
+      mintAuthority: mintAuthority, // Designated Mint Authority
+      name: metaData.name,
+      symbol: metaData.symbol,
+      uri: metaData.uri,
+    });
 
-    associatedCreatorTokenAccount = await getOrCreateAssociatedTokenAccount(
+    // Instruction to update metadata, adding custom field
+    const updateFieldInstruction = createUpdateFieldInstruction({
+      programId: TOKEN_2022_PROGRAM_ID, // Token Extension Program as Metadata Program
+      metadata: mint, // Account address that holds the metadata
+      updateAuthority: updateAuthority, // Authority that can update the metadata
+      field: metaData.additionalMetadata[0][0], // key
+      value: metaData.additionalMetadata[0][1], // value
+    });
+
+    // Add instructions to new transaction
+    const transaction = new Transaction().add(
+      createAccountInstruction,
+      initializeMetadataPointerInstruction,
+      // note: the above instructions are required before initializing the mint
+      initializeMintInstruction,
+      initializeMetadataInstruction,
+      updateFieldInstruction
+    );
+
+    // Send transaction
+    const transactionSignature = await sendAndConfirmTransaction(
       provider.connection,
-      creator,
-      tokenMint,
-      creator.publicKey
+      transaction,
+      [admin, mintKeypair] // Signers
     );
 
     console.log(
-      "associated creator token account created: ",
-      associatedCreatorTokenAccount.address.toBase58()
+      "\nCreate Mint Account:",
+      `https://solana.fm/tx/${transactionSignature}?cluster=devnet-solana`
+    );
+
+    associatedAdminAccount = await getOrCreateAssociatedTokenAccount(
+      provider.connection,
+      admin,
+      mint,
+      admin.publicKey,
+      true,
+      null,
+      null,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    console.log(
+      "Found associated admin token account:",
+      associatedAdminAccount.address.toBase58()
     );
 
     await mintTo(
       provider.connection,
-      creator,
-      tokenMint,
-      associatedCreatorTokenAccount.address,
-      creator,
-      1000000
+      admin,
+      mint,
+      associatedAdminAccount.address,
+      mintAuthority,
+      1000000000,
+      [],
+      null,
+      TOKEN_2022_PROGRAM_ID
     );
 
-    console.log("tokens minted to associated creator token account");
+    console.log("MINT DONE");
 
-    associatedUserTokenAccount = await getOrCreateAssociatedTokenAccount(
+    helper = await getFundedKeypair();
+    associatedHelperAccount = await getOrCreateAssociatedTokenAccount(
       provider.connection,
-      user,
-      tokenMint,
-      user.publicKey
+      helper,
+      mint,
+      helper.publicKey,
+      true,
+      null,
+      null,
+      TOKEN_2022_PROGRAM_ID
     );
+
+    console.log("Helper account created: ", helper.publicKey.toBase58());
 
     await transfer(
       provider.connection,
-      creator,
-      associatedCreatorTokenAccount.address,
-      associatedUserTokenAccount.address,
-      creator,
-      50000
+      admin,
+      associatedAdminAccount.address,
+      associatedHelperAccount.address,
+      admin,
+      5000000,
+      [],
+      null,
+      TOKEN_2022_PROGRAM_ID
     );
 
-    console.log("Transfer complete");
+    console.log("TRANSFER TO HELPER USER DONE");
+  }
+
+  before(async () => {
+    // Generate a random event ID between 0 and 999999
+    eventId = Math.floor(Math.random() * 1000000);
+
+    await testNewScript();
+  });
+
+  // TODO write test case to getMetadata
+  it("Gets the token metadata", async () => {
+    try {
+      const metadata = await getTokenMetadata(provider.connection, mint);
+
+      console.log("Token Metadata:", metadata);
+
+      // Assert that the metadata matches what we set earlier
+      expect(metadata.name).to.equal("TEST GRAVITAS");
+      expect(metadata.symbol).to.equal("TGS");
+      expect(metadata.uri).to.equal(
+        "https://github.com/user-attachments/files/17265711/test.json"
+      );
+
+      // Check for the additional metadata field we added
+      const descriptionField = metadata.additionalMetadata.find(
+        ([key]) => key === "description"
+      );
+      expect(descriptionField).to.not.be.undefined;
+      expect(descriptionField[1]).to.equal("Only Possible On Solana");
+    } catch (error) {
+      console.error("Error getting token metadata:", error);
+      throw error;
+    }
   });
 
   it("Creates an event", async () => {
@@ -107,7 +262,7 @@ describe("gravitas", () => {
     [eventPda] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("event"),
-        creator.publicKey.toBuffer(),
+        admin.publicKey.toBuffer(),
         new anchor.BN(eventId).toArrayLike(Buffer, "le", 8),
       ],
       program.programId
@@ -132,19 +287,20 @@ describe("gravitas", () => {
           maxCapacity
         )
         .accounts({
-          creator: creator.publicKey,
-          tokenMint: tokenMint,
+          creator: admin.publicKey,
+          tokenMint: mint,
         })
-        .signers([creator])
+        .signers([admin])
         .rpc();
 
+      console.log("Hello world");
       // Fetch the created event account
       const eventAccount = await program.account.event.fetch(eventPda);
       console.log("Event Account: ", eventAccount);
 
       // Assert that the event details are correct
       expect(eventAccount.creator.toString()).to.equal(
-        creator.publicKey.toString()
+        admin.publicKey.toString()
       );
       expect(eventAccount.eventId.toNumber()).to.equal(eventId);
       expect(eventAccount.name).to.equal(name);
@@ -152,7 +308,7 @@ describe("gravitas", () => {
       expect(eventAccount.startTime.toNumber()).to.equal(startTime);
       expect(eventAccount.endTime.toNumber()).to.equal(endTime);
       expect(eventAccount.requiredTokenMint.toString()).to.equal(
-        tokenMint.toString()
+        mint.toString()
       );
       expect(eventAccount.requiredTokenAmount.toNumber()).to.equal(
         requiredTokenAmount.toNumber()
@@ -180,11 +336,11 @@ describe("gravitas", () => {
         .registerForEvent()
         .accounts({
           event: eventPda,
-          user: user.publicKey,
-          userTokenAccount: associatedUserTokenAccount.address,
+          user: helper.publicKey,
+          userTokenAccount: associatedHelperAccount.address,
           // tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .signers([user])
+        .signers([helper])
         .rpc();
 
       console.log("User registered with transaction signature", tx);
@@ -199,7 +355,7 @@ describe("gravitas", () => {
       );
       expect(
         eventAfter.participants[eventAfter.participants.length - 1].toString()
-      ).to.equal(user.publicKey.toString());
+      ).to.equal(helper.publicKey.toString());
     } catch (error) {
       console.error("Error registering for event:", error);
       throw error;
@@ -212,11 +368,11 @@ describe("gravitas", () => {
         .registerForEvent()
         .accounts({
           event: eventPda,
-          user: user.publicKey,
-          userTokenAccount: associatedUserTokenAccount.address,
+          user: helper.publicKey,
+          userTokenAccount: associatedHelperAccount.address,
           // tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .signers([user])
+        .signers([helper])
         .rpc();
 
       // If we reach here, the second registration didn't throw an error as expected
@@ -231,9 +387,9 @@ describe("gravitas", () => {
       .cancelEvent()
       .accounts({
         event: eventPda,
-        creator: creator.publicKey,
+        creator: admin.publicKey,
       })
-      .signers([creator])
+      .signers([admin])
       .rpc();
 
     const eventAccount = await program.account.event.fetch(eventPda);
@@ -246,9 +402,9 @@ describe("gravitas", () => {
         .cancelEvent()
         .accounts({
           event: eventPda,
-          creator: creator.publicKey,
+          creator: admin.publicKey,
         })
-        .signers([user])
+        .signers([helper])
         .rpc();
 
       expect.fail("");
@@ -264,11 +420,11 @@ describe("gravitas", () => {
         .registerForEvent()
         .accounts({
           event: eventPda,
-          user: user.publicKey,
-          userTokenAccount: associatedUserTokenAccount.address, // Using the same token account for simplicity
+          user: helper.publicKey,
+          userTokenAccount: associatedHelperAccount.address, // Using the same token account for simplicity
           // tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .signers([user])
+        .signers([helper])
         .rpc();
       expect.fail("Should have thrown an error");
     } catch (error) {
