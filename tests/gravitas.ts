@@ -1,35 +1,17 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Gravitas } from "../target/types/gravitas";
-import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
+import { PublicKey, Keypair } from "@solana/web3.js";
 import {
-  TOKEN_PROGRAM_ID,
   createMint,
-  createAccount,
   mintTo,
-  createAssociatedTokenAccount,
   transfer,
   getOrCreateAssociatedTokenAccount,
+  Account,
 } from "@solana/spl-token";
 import { expect } from "chai";
 
 describe("gravitas", () => {
-  /*
-  Admin user
-  - fund the admin user account
-  - create a token mint
-  - create a token account for the admin user
-  - mint some tokens to the admin user
-  test user
-
-  - Admin user creates the event
-  - test user registers for the event
-  - test user tries to register again and fails since already registered
-  - Admin user cancels the event
-  - test user tries to register for the event again and fails since event is cancelled
-
-  */
-
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
@@ -37,26 +19,35 @@ describe("gravitas", () => {
 
   let user: Keypair;
   let creator: Keypair;
-  let userTokenAccount: PublicKey;
-  let creatorTokenAccount: PublicKey;
+
+  let associatedCreatorTokenAccount: Account;
+  let associatedUserTokenAccount: Account;
 
   let eventId: number;
   let eventPda: PublicKey;
   let tokenMint: PublicKey;
+
+  async function getFundedKeypair(): Promise<Keypair> {
+    const obj = anchor.web3.Keypair.generate();
+
+    let fundObj = await provider.connection.requestAirdrop(
+      obj.publicKey,
+      1000000000
+    );
+    await provider.connection.confirmTransaction(fundObj);
+    return obj;
+  }
 
   before(async () => {
     // Generate a random event ID between 0 and 999999
     eventId = Math.floor(Math.random() * 1000000);
 
     // Create a new Solana keypair for the user
-    creator = anchor.web3.Keypair.generate();
+    creator = await getFundedKeypair();
+    console.log("Funded creator account", creator.publicKey.toBase58());
 
-    let fundCreator = await provider.connection.requestAirdrop(
-      creator.publicKey,
-      1000000000
-    );
-    await provider.connection.confirmTransaction(fundCreator);
-    console.log("Funded creator account", fundCreator);
+    user = await getFundedKeypair();
+    console.log("Funded user account");
 
     // Create a token mint
     tokenMint = await createMint(
@@ -66,10 +57,10 @@ describe("gravitas", () => {
       null,
       9
     );
+
     console.log("Token mint created", tokenMint.toString());
 
-    // Create a token account for the creator
-    creatorTokenAccount = await createAccount(
+    associatedCreatorTokenAccount = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       creator,
       tokenMint,
@@ -77,79 +68,38 @@ describe("gravitas", () => {
     );
 
     console.log(
-      "Creator token account created",
-      creatorTokenAccount.toString()
+      "associated creator token account created: ",
+      associatedCreatorTokenAccount.address.toBase58()
     );
 
-    // create associatedTokenAccount
-    const associatedCreatorTokenAccount =
-      await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        creator,
-        tokenMint,
-        creator.publicKey
-      );
-
-    console.log(
-      "Associated token account created",
-      associatedCreatorTokenAccount.toString()
+    await mintTo(
+      provider.connection,
+      creator,
+      tokenMint,
+      associatedCreatorTokenAccount.address,
+      creator,
+      1000000
     );
 
-    // ######
-    // User Setup
-    // #########
-    user = anchor.web3.Keypair.generate();
+    console.log("tokens minted to associated creator token account");
 
-    // fund user and creator account
-    let fundUser = await provider.connection.requestAirdrop(
-      user.publicKey,
-      1000000000
-    );
-    await provider.connection.confirmTransaction(fundUser);
-    console.log("Funded user account", fundUser);
-
-    userTokenAccount = await createAccount(
+    associatedUserTokenAccount = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       user,
       tokenMint,
       user.publicKey
     );
-    console.log("User token account created", userTokenAccount.toString());
 
-    const associatedUserTokenAccount = await getOrCreateAssociatedTokenAccount(
-      provider.connection,
-      user,
-      tokenMint,
-      user.publicKey
-    );
-    console.log(
-      "User associated token account created",
-      associatedUserTokenAccount.toString()
-    );
-
-    // Mint token
-    const mintTokenSignature = await mintTo(
+    await transfer(
       provider.connection,
       creator,
-      tokenMint,
-      creatorTokenAccount,
+      associatedCreatorTokenAccount.address,
+      associatedUserTokenAccount.address,
       creator,
-      100000000
+      50000
     );
 
-    console.log("Minted tokens", mintTokenSignature.toString());
-
-    // // tranfer token to user
-    const tranferTokenSignature = await transfer(
-      provider.connection,
-      creator,
-      creatorTokenAccount,
-      userTokenAccount,
-      creator,
-      100000
-    );
-
-    console.log("Transferred tokens", tranferTokenSignature.toString());
+    console.log("Transfer complete");
   });
 
   it("Creates an event", async () => {
@@ -231,7 +181,7 @@ describe("gravitas", () => {
         .accounts({
           event: eventPda,
           user: user.publicKey,
-          userTokenAccount: userTokenAccount,
+          userTokenAccount: associatedUserTokenAccount.address,
           // tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([user])
@@ -263,7 +213,7 @@ describe("gravitas", () => {
         .accounts({
           event: eventPda,
           user: user.publicKey,
-          userTokenAccount: userTokenAccount,
+          userTokenAccount: associatedUserTokenAccount.address,
           // tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([user])
@@ -315,7 +265,7 @@ describe("gravitas", () => {
         .accounts({
           event: eventPda,
           user: user.publicKey,
-          userTokenAccount: userTokenAccount, // Using the same token account for simplicity
+          userTokenAccount: associatedUserTokenAccount.address, // Using the same token account for simplicity
           // tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([user])
