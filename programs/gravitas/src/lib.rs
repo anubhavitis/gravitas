@@ -48,6 +48,7 @@ pub mod gravitas {
         let creator = &ctx.accounts.creator;
         Ok(creator.current_supply)
     }
+
 }
 
 #[derive(Accounts)]

@@ -87,7 +87,7 @@ describe("socialfi", () => {
 
     expect(creatorAccount.name).to.equal(name);
     expect(creatorAccount.bio).to.equal(bio);
-    expect(creatorAccount.currentSupply.toNumber()).to.equal(0);
+    expect(creatorAccount.currentSupply.toNumber()).to.equal(1);
 
     console.log("Creator created successfully.");
   });
@@ -95,7 +95,7 @@ describe("socialfi", () => {
   it("Buys initial shares for creator", async () => {
     console.log("Buying initial shares for creator...");
 
-    const amount = new BN(1000); // Buy 1000 shares
+    const amount = new BN(100); // Buy 1000 shares
 
     const tx = await program.methods
       .buyShares(amount)
@@ -111,7 +111,9 @@ describe("socialfi", () => {
     console.log("Transaction signature for initial share creation:", tx);
     const creatorAccount = await program.account.creator.fetch(creatorPda);
     console.log("Creator account:", creatorAccount);
-    expect(creatorAccount.currentSupply.toNumber()).to.equal(amount.toNumber());
+    expect(creatorAccount.currentSupply.toNumber()).to.equal(
+      amount.toNumber() + 1
+    );
 
     console.log(
       `Initial shares bought successfully. Current supply: ${creatorAccount.currentSupply.toNumber()}`
@@ -221,7 +223,7 @@ describe("socialfi", () => {
   it("Buys shares", async () => {
     console.log("Testing share purchase...");
 
-    const amount = new BN(100000);
+    const amount = new BN(100);
 
     const traderBalanceBefore = await provider.connection.getBalance(
       trader.publicKey
@@ -293,8 +295,8 @@ describe("socialfi", () => {
     );
 
     expect(creatorAccount.currentSupply.toNumber()).to.equal(
-      amount.toNumber() + 1000
-    ); // 1000 initial + 100 new
+      amount.toNumber() + 101
+    ); // 100 initial + 100 new
     expect(traderBalanceAfter).to.be.below(traderBalanceBefore);
     // expect(creatorBalanceAfter).to.be.above(creatorBalanceBefore); to.be above or equal
     expect(creatorBalanceAfter).to.be.greaterThanOrEqual(creatorBalanceBefore);
@@ -374,7 +376,7 @@ describe("socialfi", () => {
       `Contract balance after: ${contractBalanceAfter / LAMPORTS_PER_SOL} SOL`
     );
 
-    expect(creatorAccount.currentSupply.toNumber()).to.equal(100950); // 1000 - 50
+    expect(creatorAccount.currentSupply.toNumber()).to.equal(201 - 50); // 1000 - 50
     expect(traderBalanceAfter).to.be.above(traderBalanceBefore);
     expect(creatorBalanceAfter).to.be.greaterThanOrEqual(creatorBalanceBefore);
     expect(contractBalanceAfter).to.be.below(contractBalanceBefore);

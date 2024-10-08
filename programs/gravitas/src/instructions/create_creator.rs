@@ -26,8 +26,8 @@ pub fn create_creator(ctx: Context<CreateCreator>, name: String, bio: String) ->
     creator.user = ctx.accounts.user.key();
     creator.name = name;
     creator.bio = bio;
-    creator.current_supply = 0;
+    creator.current_supply = 1;
     creator.bump = ctx.bumps.creator;
-
+    creator.event_count = 0;
     Ok(())
 }
